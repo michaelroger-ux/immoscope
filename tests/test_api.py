@@ -47,3 +47,13 @@ def test_bookmarklet_import(db):
     assert r.status_code == 200 and "1 annonce(s) importée(s)" in r.text
     assert db.get_listing("leboncoin:3000000001").city == "Morlaix"
     assert client.post("/api/import/html", json={"html": "<html></html>"}).status_code == 422
+
+
+def test_ephemeral_storage_warning_on_render(db, monkeypatch):
+    from immoscope import config
+    client = TestClient(app)
+    monkeypatch.setattr(config, "ON_RENDER", True)
+    monkeypatch.setattr(config, "DATA_DIR_FROM_ENV", False)
+    assert client.get("/api/meta").json()["ephemeral_storage"] is (db.kind == "sqlite")
+    monkeypatch.setattr(config, "DATA_DIR_FROM_ENV", True)  # disque persistant Render (IMMO_DATA_DIR=/data)
+    assert client.get("/api/meta").json()["ephemeral_storage"] is False

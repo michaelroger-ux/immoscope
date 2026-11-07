@@ -38,38 +38,45 @@ immoscope serve               # http://127.0.0.1:8000
 Sans clé API, tout fonctionne sauf l'analyse de nouvelles photos et la compréhension « avancée » des
 requêtes (un analyseur par règles prend le relais). Clé : <https://console.anthropic.com/>.
 
-## Mettre en ligne : Render (application) + Supabase (base de données)
+## Travailler en local, faire tourner l'application sur Render
 
-Supabase ne fait pas tourner d'application Python, mais fournit une base PostgreSQL gratuite ; Render
-fait tourner l'application. Les deux offres gratuites suffisent pour un usage personnel. Le dépôt contient
-un fichier `render.yaml` : Render crée le service tout seul.
+Même organisation que la supervision Workways : le code se modifie sur votre ordinateur, GitHub garde la
+référence, Render fait tourner l'application en ligne et se met à jour à chaque `git push`.
 
-1. **Supabase** : créez un projet, région **Frankfurt (eu-central-1)**, et notez le mot de passe de la
-   base. Bouton **Connect** → onglet **Session pooler** → copiez l'adresse
-   `postgresql://postgres.<projet>:[YOUR-PASSWORD]@aws-…pooler.supabase.com:5432/postgres` en remplaçant
-   `[YOUR-PASSWORD]`. Prenez bien le *Session pooler* : l'adresse « Direct connection » est en IPv6 et
-   Render ne sait pas la joindre. Rien d'autre à configurer, Immoscope crée ses tables au démarrage.
-2. **GitHub** : poussez ce dossier dans un dépôt (privé si vous voulez).
-3. **Render** : *New* → *Blueprint* → choisissez le dépôt. Render lit `render.yaml` et vous demande :
-   * `IMMO_PASSWORD` : le mot de passe d'accès à l'application (choisissez-en un solide) ;
-   * `DATABASE_URL` : l'adresse Supabase de l'étape 1 ;
-   * `ANTHROPIC_API_KEY` : votre clé API Claude.
+**En local** (développement, essais, Claude Code avec l'extension Chrome) :
 
-   Validez : l'application est en ligne quelques minutes plus tard sur `https://immoscope-….onrender.com`.
-4. Connectez-vous, puis **réinstallez le marque-page** depuis la version en ligne (menu *Importer*) :
-   il contient l'adresse du site et un jeton personnel.
+```bash
+git clone https://github.com/michaelroger-ux/immoscope.git
+cd immoscope
+python -m venv .venv && source .venv/bin/activate     # Windows : .venv\Scripts\activate
+pip install -e ".[dev]"
+immoscope serve                                       # http://127.0.0.1:8000, données dans ./data
+```
 
-Chaque `git push` redéploie automatiquement.
+**En ligne, sur Render** (une seule fois) : *New* → *Blueprint* → dépôt `michaelroger-ux/immoscope`.
+Render lit `render.yaml` : région Francfort, plan *Starter*, une instance, base SQLite sur un disque
+persistant de 1 Go monté sur `/data`. Il demande deux secrets :
 
-**Limites des offres gratuites.** Render met le service en veille après 15 minutes sans visite ; le
-réveil prend environ une minute. Pendant une longue analyse, gardez la page ouverte : elle interroge le
-serveur et le maintient éveillé. Le plan *Starter* de Render (environ 7 $/mois) supprime la mise en veille.
-Supabase gratuit offre 500 Mo (largement de quoi stocker des milliers d'annonces) et met en pause un
-projet inactif depuis une semaine ; il se réactive depuis son tableau de bord.
+* `IMMO_PASSWORD` : le mot de passe d'accès à l'application (choisissez-en un solide) ;
+* `ANTHROPIC_API_KEY` : votre clé API Claude.
 
-**Sans Supabase** : plan Starter de Render + disque persistant monté sur `/var/data`, avec
-`IMMO_DATA_DIR=/var/data` et sans `DATABASE_URL` (SQLite). Sans base ni disque, les données seraient
-effacées à chaque redémarrage ; l'application affiche alors « Stockage temporaire ».
+L'application est en ligne quelques minutes plus tard sur `https://immoscope.onrender.com` (ou une
+adresse voisine si ce nom est pris). Connectez-vous, puis **réinstallez le marque-page** depuis la version en
+ligne (menu *Importer*) : il contient l'adresse du site et un jeton personnel.
+
+**Ensuite** : modifiez en local, testez avec `pytest` et `immoscope serve`, puis `git push` : Render
+redéploie tout seul. Les annonces et analyses en ligne restent sur le disque Render ; celles de votre
+ordinateur restent dans `./data`. Pour envoyer vos annonces locales en ligne : bouton *Importer* → *Fichier*
+avec un export JSON, ou le marque-page sur la version en ligne.
+
+**Coût** : environ 7 $/mois pour le plan Starter, plus 0,25 $/mois pour le disque de 1 Go. Le disque
+persistant n'existe pas sur le plan gratuit.
+
+**Variante gratuite** : plan *Free* de Render (mise en veille après 15 minutes sans visite) et base
+PostgreSQL gratuite chez Supabase. Mettez l'adresse *Session pooler* de Supabase (onglet **Connect**,
+port 5432 ; l'adresse « Direct connection » est en IPv6, injoignable depuis Render) dans `DATABASE_URL`,
+retirez le bloc `disk` et `IMMO_DATA_DIR` de `render.yaml`, et passez `plan` à `free`. Sans disque ni
+base, les données seraient effacées à chaque redémarrage ; l'application affiche alors « Stockage temporaire ».
 
 **Sécurité.** Tout est protégé par `IMMO_PASSWORD` (session de 30 jours dans un cookie signé ; changer
 le mot de passe déconnecte tout le monde). Sans ce mot de passe, n'importe qui trouvant l'adresse pourrait

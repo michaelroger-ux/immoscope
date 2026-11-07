@@ -1,22 +1,30 @@
-# Déploiement sur Render en « Blueprint » : Render lit ce fichier et crée le service.
+# Render (Blueprint) : New → Blueprint → choisir ce dépôt. Même montage que la supervision Workways :
+# région Francfort, une seule instance, base SQLite sur un disque persistant.
 # Documentation : https://render.com/docs/blueprint-spec
-# Les valeurs marquées sync: false sont demandées par Render lors de la création (jamais dans le dépôt).
 services:
   - type: web
     name: immoscope
     runtime: python
-    plan: free            # « starter » pour un service toujours allumé (pas de mise en veille)
-    region: frankfurt     # le plus proche de la France ; choisissez la même région côté Supabase
+    region: frankfurt
+    plan: starter            # le disque persistant demande un plan payant ; pas de mise en veille
+    numInstances: 1          # une seule instance : base SQLite et analyses en arrière-plan dans le même processus
     buildCommand: pip install .
     startCommand: uvicorn immoscope.api:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
     healthCheckPath: /healthz
     autoDeploy: true
+    disk:
+      name: immoscope-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
-      - key: IMMO_PASSWORD        # mot de passe d'accès à l'application (obligatoire)
-        sync: false
-      - key: DATABASE_URL         # Supabase : chaîne « Session pooler » (port 5432)
-        sync: false
-      - key: ANTHROPIC_API_KEY    # analyse des photos par Claude
-        sync: false
-      - key: IMMO_SECRET_KEY      # signature des sessions, générée par Render
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: IMMO_DATA_DIR
+        value: /data
+      - key: IMMO_SECRET_KEY
         generateValue: true
+      # Secrets à saisir dans Render au premier déploiement (jamais dans le dépôt) :
+      - key: IMMO_PASSWORD       # mot de passe d'accès à l'application
+        sync: false
+      - key: ANTHROPIC_API_KEY   # analyse des photos par Claude
+        sync: false

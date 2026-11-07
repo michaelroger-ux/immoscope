@@ -114,7 +114,7 @@ def meta():
         "import_token": auth.import_token() if auth.enabled() else None,
         "storage": db.kind,
         # SQLite sur Render sans disque : les données disparaissent à chaque redémarrage
-        "ephemeral_storage": config.ON_RENDER and db.kind == "sqlite" and not config.DATA_DIR.as_posix().startswith("/var/data"),
+        "ephemeral_storage": config.ON_RENDER and db.kind == "sqlite" and not config.DATA_DIR_FROM_ENV,
         "count": db.count(),
         "pending": {k: len(v) for k, v in p.items()},
         "feature_groups": [

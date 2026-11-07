@@ -21,6 +21,8 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 DATA_DIR = Path(os.getenv("IMMO_DATA_DIR", "data")).resolve()
+# Vrai quand le dossier de données est choisi explicitement (disque persistant Render : /data).
+DATA_DIR_FROM_ENV = bool(os.getenv("IMMO_DATA_DIR"))
 DB_PATH = Path(os.getenv("IMMO_DB_PATH", str(DATA_DIR / "immoscope.db")))
 # Base PostgreSQL (Supabase, Render…) : prioritaire sur le fichier SQLite si définie.
 DATABASE_URL = os.getenv("DATABASE_URL") or None
