@@ -1,0 +1,37 @@
+[project]
+name = "immoscope"
+version = "0.1.0"
+description = "Recherche immobilière intelligente : analyse des photos d'annonces et de la localisation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "anthropic>=2.6",
+    "pillow>=10.0",
+    "python-multipart>=0.0.9",
+    "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+immoscope = "immoscope.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["immoscope*"]
+
+[tool.setuptools.package-data]
+immoscope = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

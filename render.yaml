@@ -1,0 +1,22 @@
+# Déploiement sur Render en « Blueprint » : Render lit ce fichier et crée le service.
+# Documentation : https://render.com/docs/blueprint-spec
+# Les valeurs marquées sync: false sont demandées par Render lors de la création (jamais dans le dépôt).
+services:
+  - type: web
+    name: immoscope
+    runtime: python
+    plan: free            # « starter » pour un service toujours allumé (pas de mise en veille)
+    region: frankfurt     # le plus proche de la France ; choisissez la même région côté Supabase
+    buildCommand: pip install .
+    startCommand: uvicorn immoscope.api:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: IMMO_PASSWORD        # mot de passe d'accès à l'application (obligatoire)
+        sync: false
+      - key: DATABASE_URL         # Supabase : chaîne « Session pooler » (port 5432)
+        sync: false
+      - key: ANTHROPIC_API_KEY    # analyse des photos par Claude
+        sync: false
+      - key: IMMO_SECRET_KEY      # signature des sessions, générée par Render
+        generateValue: true

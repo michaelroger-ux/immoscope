@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Immoscope</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 15 16 5l12 10v12H4z' fill='%232f6f5e'/%3E%3Ccircle cx='16' cy='19' r='5' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 15 16 5l12 10v12H4z" fill="currentColor"/><circle cx="16" cy="19" r="5" fill="none" stroke="var(--bg)" stroke-width="2.5"/></svg>
+      Immoscope
+    </a>
+    <div class="status" id="status"></div>
+    <button class="btn" id="btn-import" type="button">Importer des annonces</button>
+  </header>
+  <div class="progress" id="progress" hidden><div class="progress-bar" id="progress-bar"></div><span id="progress-text"></span></div>
+
+  <main>
+    <section class="hero">
+      <form id="search-form" class="search">
+        <textarea id="q" rows="2" placeholder="Décrivez le bien : « longère en pierre avec terrain arboré, gare à moins de 15 min à pied, moins de 350 000 € autour de Rennes »"></textarea>
+        <button class="btn primary" type="submit">Rechercher</button>
+      </form>
+      <div class="examples" id="examples"></div>
+    </section>
+
+    <section class="criteria" id="criteria-bar" hidden>
+      <div class="criteria-head">
+        <span id="parser-label" class="muted"></span>
+        <label class="switch"><input type="checkbox" id="strict"> Seulement les annonces qui remplissent tous les critères</label>
+        <button class="link" id="toggle-filters" type="button">Affiner les critères</button>
+      </div>
+      <div class="chips" id="chips"></div>
+    </section>
+
+    <section class="filters" id="filters" hidden>
+      <div class="filters-grid">
+        <fieldset>
+          <legend>Bien</legend>
+          <div class="types" id="f-types"></div>
+          <label>Prix max (€) <input type="number" id="f-price-max" min="0" step="5000"></label>
+          <label>Surface min (m²) <input type="number" id="f-surface-min" min="0"></label>
+          <label>Terrain min (m²) <input type="number" id="f-land-min" min="0" step="100"></label>
+          <label>Pièces min <input type="number" id="f-rooms-min" min="0"></label>
+          <label>Secteur <input type="text" id="f-near" placeholder="Ville ou lieu"></label>
+          <label>Rayon (km) <input type="number" id="f-radius" min="1"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Sur les photos <span class="muted">(clic : je veux · 2ᵉ clic : j'évite)</span></legend>
+          <div id="f-features"></div>
+          <div class="free-visual">
+            <input type="text" id="f-free" placeholder="Autre critère visuel : « volets bleus », « glycine »…">
+            <button class="btn small" type="button" id="f-free-add">Ajouter</button>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Localisation</legend>
+          <div id="f-prox"></div>
+        </fieldset>
+      </div>
+      <div class="filters-actions">
+        <button class="btn primary" type="button" id="apply-filters">Appliquer</button>
+      </div>
+    </section>
+
+    <section class="results-wrap">
+      <div class="results">
+        <div class="results-head" id="results-head"></div>
+        <div id="results"></div>
+      </div>
+      <div class="map-wrap"><div id="map"></div></div>
+    </section>
+  </main>
+
+  <dialog id="detail" class="modal wide"><div id="detail-body"></div></dialog>
+
+  <dialog id="import" class="modal">
+    <div class="modal-head"><h2>Importer des annonces</h2><button class="icon" data-close aria-label="Fermer">✕</button></div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="t-url">Adresse (URL)</button>
+      <button class="tab" data-tab="t-bookmark">Marque-page</button>
+      <button class="tab" data-tab="t-html">Code source</button>
+      <button class="tab" data-tab="t-file">Fichier</button>
+      <button class="tab" data-tab="t-demo">Démo</button>
+    </div>
+    <div class="tab-panel" id="t-url">
+      <p>Collez l'adresse d'une annonce ou d'une page de résultats. Certains sites bloquent les requêtes automatiques : utilisez alors le marque-page.</p>
+      <form id="import-url-form" class="row">
+        <input type="url" id="import-url" required placeholder="https://www.exemple-immo.fr/annonce/123456">
+        <button class="btn primary" type="submit">Importer</button>
+      </form>
+    </div>
+    <div class="tab-panel" id="t-bookmark" hidden>
+      <p>Glissez ce bouton dans la barre de favoris de votre navigateur. Sur une page d'annonce (ou de résultats) que vous consultez, cliquez dessus : la page est envoyée à Immoscope, qui en extrait les annonces.</p>
+      <p class="center"><a class="btn primary" id="bookmarklet" href="#">Envoyer à Immoscope</a></p>
+      <p class="muted small">Fonctionne tant qu'Immoscope tourne sur cet ordinateur. Seule la page affichée est envoyée, une fois, à votre demande.</p>
+    </div>
+    <div class="tab-panel" id="t-html" hidden>
+      <p>Sur la page de l'annonce : clic droit → « Afficher le code source », tout sélectionner, copier, puis coller ici.</p>
+      <form id="import-html-form">
+        <input type="url" id="import-html-url" placeholder="Adresse de la page (facultatif)">
+        <textarea id="import-html" rows="6" required placeholder="&lt;html&gt;…"></textarea>
+        <button class="btn primary" type="submit">Importer</button>
+      </form>
+    </div>
+    <div class="tab-panel" id="t-file" hidden>
+      <p>Fichier JSON ou CSV (colonnes : title, url, price, surface, land_surface, rooms, city, postcode, lat, lon, images séparées par « | », description…).</p>
+      <form id="import-file-form" class="row">
+        <input type="file" id="import-file" accept=".json,.csv" required>
+        <button class="btn primary" type="submit">Importer</button>
+      </form>
+    </div>
+    <div class="tab-panel" id="t-demo" hidden>
+      <p>12 annonces <strong>fictives</strong>, illustrées par des dessins, avec des analyses précalculées : pour découvrir l'interface sans clé API.</p>
+      <div class="row">
+        <button class="btn primary" id="demo-load" type="button">Charger la démo</button>
+        <button class="btn" id="demo-remove" type="button">Retirer la démo</button>
+      </div>
+    </div>
+    <p class="import-result" id="import-result" role="status"></p>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
