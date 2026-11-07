@@ -53,6 +53,8 @@ def test_ephemeral_storage_warning_on_render(db, monkeypatch):
     from immoscope import config
     client = TestClient(app)
     monkeypatch.setattr(config, "ON_RENDER", True)
+    monkeypatch.setattr(config, "PASSWORD", "secret")  # sur Render, sans mot de passe tout est verrouillé
+    client.post("/login", data={"password": "secret"})
     monkeypatch.setattr(config, "DATA_DIR_FROM_ENV", False)
     assert client.get("/api/meta").json()["ephemeral_storage"] is (db.kind == "sqlite")
     monkeypatch.setattr(config, "DATA_DIR_FROM_ENV", True)  # disque persistant Render (IMMO_DATA_DIR=/data)

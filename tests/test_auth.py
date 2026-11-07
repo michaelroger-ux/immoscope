@@ -62,3 +62,13 @@ def test_no_cors_headers(db):
     r = TestClient(app).options("/api/search", headers={"Origin": "https://evil.example",
                                                          "Access-Control-Request-Method": "POST"})
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_locked_on_render_without_password(db, monkeypatch):
+    monkeypatch.setattr(config, "PASSWORD", None)
+    monkeypatch.setattr(config, "ON_RENDER", True)
+    c = TestClient(app)
+    assert c.get("/healthz").json() == {"ok": True}  # le contrôle de santé de Render passe
+    assert c.get("/").status_code == 503 and "IMMO_PASSWORD" in c.get("/").text
+    assert c.post("/api/demo/load").status_code == 503
+    assert c.get("/static/app.js").status_code == 503

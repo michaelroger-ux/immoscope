@@ -37,9 +37,17 @@ _PUBLIC_PATHS = {"/login", "/healthz", "/api/import/bookmarklet"}
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    if not auth.enabled():
-        return await call_next(request)
     path = request.url.path
+    if not auth.enabled():
+        # En ligne sans mot de passe : tout reste fermé (seul le contrôle de santé répond).
+        if config.ON_RENDER and path != "/healthz":
+            msg = "Immoscope est verrouillé : ajoutez la variable IMMO_PASSWORD dans Render (Environment)."
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": msg}, status_code=503)
+            return HTMLResponse(f"<!doctype html><meta charset='utf-8'><title>Immoscope</title>"
+                                f"<p style='font:16px system-ui;margin:20vh auto;max-width:520px;padding:0 16px'>"
+                                f"{msg}</p>", status_code=503)
+        return await call_next(request)
     if path in _PUBLIC_PATHS or path.startswith("/static/"):
         return await call_next(request)
     if auth.valid_session(request.cookies.get(auth.COOKIE)):
