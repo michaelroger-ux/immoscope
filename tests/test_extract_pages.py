@@ -81,3 +81,37 @@ def test_search_url_with_price_filter_is_not_an_ad():
     from immoscope.sources.extract import _ad_url
     assert _ad_url("https://www.seloger.com/classified-search?priceMax=400000&plotSpaceMin=2000", None) is None
     assert _ad_url("https://immo.example/annonce?id=1234567", None) == "https://immo.example/annonce?id=1234567"
+
+
+def test_embedded_objects_completed_by_cards():
+    """Données intégrées pauvres (identifiant, titre, prix) + cartes affichées (photos, texte, lien)."""
+    items = [{"id": "262U3177U91W", "title": "Maison", "price": {"value": 349000, "currency": "EUR"},
+              "mainDescription": {"headline": "Maison", "description": "Belle longère en pierre, jardin arboré, au calme."},
+              "hardFacts": {"livingSpace": "120 m²"}, "location": {"city": "Dourdan", "zipCode": "91410"},
+              "agency": {"name": "Agence du centre", "logo": "https://img.example/agence/logo.png"}},
+             {"id": "26NKNN4LMUV1", "title": "Maison", "price": {"value": 395000},
+              "location": {"city": "Rambouillet", "zipCode": "78120"}, "rooms": 6}]
+    data = {"search": {"classifieds": items}}
+    cards = "".join(f"""<li><a href="/annonces/achat/maison/{v}/{i}.htm"><img src="https://v.seloger.example/{i}/1.jpg"></a>
+        <h3>Maison {p} pièces</h3><p>{pr} €</p><p>{v.title()} ({cp})</p></li>"""
+                    for i, p, pr, v, cp in [("262U3177U91W", 5, "349 000", "dourdan", "91410"),
+                                            ("26NKNN4LMUV1", 6, "395 000", "rambouillet", "78120")])
+    html = (f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+            f'<ul>{cards}</ul></body></html>')
+    url = "https://www.seloger.com/classified-search?distributionTypes=Buy&priceMax=400000"
+    a, b = extract_listings(html, url)
+    assert a.id == "seloger:262U3177U91W" and a.price == 349000
+    assert a.description.startswith("Belle longère")  # description trouvée dans « mainDescription »
+    assert a.images == ["https://v.seloger.example/262U3177U91W/1.jpg"]  # photo de la carte, pas le logo d'agence
+    assert a.url == "https://www.seloger.com/annonces/achat/maison/dourdan/262U3177U91W.htm"
+    assert b.images and b.url.endswith("26NKNN4LMUV1.htm") and "395 000 €" in b.description
+
+
+def test_photos_found_under_unusual_keys():
+    from immoscope.sources.extract import map_object
+    obj = {"id": "ABC12345", "title": "Maison", "price": 300000,
+           "media": {"gallery": [{"variants": {"large": "https://cdn.example/visuels/1/large.jpg"}},
+                                 {"variants": {"large": "https://cdn.example/visuels/2/large.jpg"}}]},
+           "seller": {"avatar": "https://cdn.example/avatars/9.jpg"}}
+    x = map_object(obj, "https://immo.example/recherche")
+    assert x.images == ["https://cdn.example/visuels/1/large.jpg", "https://cdn.example/visuels/2/large.jpg"]

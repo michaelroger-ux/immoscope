@@ -42,7 +42,11 @@ _LON_KEYS = ("lng", "lon", "longitude", "long")
 _ADDRESS_KEYS = ("streetaddress", "address", "adresse", "street")
 _DATE_KEYS = ("first_publication_date", "publicationdate", "datepublished", "published_at", "createdat",
               "creationdate", "index_date", "datecreated")
-_IMAGE_KEYS = ("images", "photos", "pictures", "medias", "imageurls", "image", "photo", "thumbnails", "media")
+_IMAGE_KEYS = ("images", "photos", "pictures", "medias", "imageurls", "image", "photo", "thumbnails", "media",
+               "gallery", "galleryimages", "visuals", "visuels", "pictureurls", "photourls", "mainpicture",
+               "picture", "cover", "thumbnail", "thumb")
+_IMG_URL = re.compile(r"\.(?:jpe?g|png|webp|avif)(?:[?#]|$)|/(?:photos?|images?|img|visuels?|medias?|pictures?)/", re.I)
+_NOT_PHOTO = re.compile(r"\.svg(?:[?#]|$)|logo|icon|avatar|sprite|placeholder|marker|pixel", re.I)
 _NEST_KEYS = ("location", "address", "geo", "offers", "about", "mainentity", "itemoffered", "attributes",
               "characteristics", "features", "details", "property", "realestate", "floorsize", "position",
               "coordinates", "pricing", "price")
@@ -76,11 +80,23 @@ def _attributes_as_dict(value: Any) -> dict:
     return out
 
 
-def _flat(obj: dict, depth: int = 2) -> dict:
-    """Aplatit l'objet : clés de premier niveau prioritaires, puis sous-objets connus (lieu, offre…)."""
+# Sous-objets qui décrivent autre chose que le bien (agence, contact, annonces similaires…)
+_SKIP_KEYS = ("agency", "agence", "agent", "advertiser", "publisher", "seller", "owner", "contact", "user",
+              "broker", "company", "professional", "provider", "brand", "logo", "tracking", "analytics", "seo",
+              "breadcrumb", "similar", "recommend", "related", "promot", "sponsor", "ads", "banner")
+
+
+def _skipped(key: str) -> bool:
+    return any(s in key for s in _SKIP_KEYS)
+
+
+def _flat(obj: dict, depth: int = 3) -> dict:
+    """Aplatit l'objet : clés de premier niveau prioritaires, puis sous-objets connus (lieu, offre…),
+    puis les autres sous-objets (« mainDescription », « hardFacts »…), sauf agence, contact, etc."""
     flat = _lower_keys(obj)
     if depth <= 0:
         return flat
+    children = list(flat.items())
     for nk in _NEST_KEYS:
         sub = flat.get(nk)
         if isinstance(sub, list) and sub and all(isinstance(i, dict) for i in sub):
@@ -90,6 +106,11 @@ def _flat(obj: dict, depth: int = 2) -> dict:
             for k, v in _flat(sub, depth - 1).items():
                 flat.setdefault(k, v)
                 flat.setdefault(f"{nk}.{k}", v)
+    for key, sub in children:
+        if key in _NEST_KEYS or not isinstance(sub, dict) or _skipped(key):
+            continue
+        for k, v in _flat(sub, depth - 1).items():
+            flat.setdefault(k, v)
     return flat
 
 
@@ -166,7 +187,35 @@ def _images(flat: dict, base_url: Optional[str]) -> list[str]:
             walk(flat[k])
             if urls:
                 break
-    return urls
+    return [u for u in urls if not _NOT_PHOTO.search(u)]
+
+
+def _fill_template(url: str) -> Optional[str]:
+    """Adresses d'images à gabarit (« …/{width}/… ») : on fixe la taille, sinon on renonce."""
+    sizes = {"width": "800", "w": "800", "height": "600", "h": "600", "size": "800"}
+    out = re.sub(r"\{(\w+)\}", lambda m: sizes.get(m.group(1).lower(), "\x00"), url)
+    return None if "\x00" in out else out
+
+
+def _scan_images(obj: Any, base_url: Optional[str], depth: int = 0, found: Optional[list] = None) -> list[str]:
+    """Toutes les adresses de photos présentes dans l'objet (hors agence, logos…)."""
+    found = [] if found is None else found
+    if depth > 6 or len(found) >= 40:
+        return found
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not (isinstance(k, str) and _skipped(k.lower())):
+                _scan_images(v, base_url, depth + 1, found)
+    elif isinstance(obj, list):
+        for v in obj[:60]:
+            _scan_images(v, base_url, depth + 1, found)
+    elif isinstance(obj, str) and len(obj) < 600 and (obj.startswith(("http://", "https://", "//")) or obj.startswith("/")):
+        url = "https:" + obj if obj.startswith("//") else urljoin(base_url or "", obj)
+        if "{" in url:
+            url = _fill_template(url) or ""
+        if url.startswith("http") and _IMG_URL.search(url) and not _NOT_PHOTO.search(url) and url not in found:
+            found.append(url)
+    return found
 
 
 def _ptype(flat: dict, title: str) -> Optional[str]:
@@ -218,7 +267,7 @@ def map_object(obj: dict, page_url: Optional[str] = None, source: Optional[str] 
     description = _text(_first(flat, _DESC_KEYS)) or ""
     if description == title:
         description = ""
-    images = _images(flat, url)
+    images = _images(flat, url) or _scan_images(obj, url)
     surface = _num(_first(flat, _SURFACE_KEYS))
     land = _num(_first(flat, _LAND_KEYS))
     rooms = _num(_first(flat, _ROOMS_KEYS))
@@ -415,6 +464,34 @@ def _merge(primary: Listing, other: Listing) -> Listing:
     return Listing(**data, raw=primary.raw)
 
 
+def _merge_cards(listings: list[Listing], cards: list[Listing], page_url: Optional[str]) -> list[Listing]:
+    """Associe chaque annonce à sa carte (même identifiant, même lien ou même prix) et comble les manques."""
+    if not cards:
+        return listings
+    by_id = {c.id.split(":", 1)[1].lower(): c for c in cards}
+    by_url = {c.url: c for c in cards if c.url}
+    prices: dict[float, list[Listing]] = {}
+    for c in cards:
+        if c.price:
+            prices.setdefault(c.price, []).append(c)
+    out = []
+    for item in listings:
+        ext = item.id.split(":", 1)[1].lower()
+        card = by_id.get(ext) or (by_url.get(item.url) if item.url != page_url else None) \
+            or next((c for c in cards if ext and ext in (c.url or "").lower()), None) \
+            or (prices[item.price][0] if item.price in prices and len(prices[item.price]) == 1 else None)
+        if card is None:
+            out.append(item)
+            continue
+        merged = _merge(item, card)
+        if (not item.url or item.url == page_url) and card.url:
+            merged = merged.model_copy(update={"url": card.url})
+        # la description propre de l'annonce prime sur le texte brut de la carte
+        merged = merged.model_copy(update={"description": item.description or card.description})
+        out.append(merged)
+    return out
+
+
 def _id_in_url(listing: Listing, page_url: str) -> bool:
     ext = listing.id.split(":", 1)[1]
     return bool(re.fullmatch(r"\d{5,}|[A-Za-z0-9\-]{8,}", ext)) and ext in page_url
@@ -444,9 +521,9 @@ def extract_listings(html: str, page_url: Optional[str] = None) -> list[Listing]
             for extra in ld + ([og_listing] if og_listing else []):
                 main = _merge(main, extra)
             return [main]
-    if len(embedded) >= 2:  # page de résultats
-        return embedded
     is_ad_page = bool(page_url and _ad_url(page_url, None))
+    if len(embedded) >= 2:  # page de résultats : chaque annonce complétée par sa carte affichée
+        return embedded if is_ad_page else _merge_cards(embedded, extract_cards(soup, page_url), page_url)
     # page de résultats sans données intégrées exploitables : cartes affichées
     # (sur une page d'annonce, les cartes sont des « annonces similaires » : on les ignore)
     cards = [] if is_ad_page else extract_cards(soup, page_url)
@@ -499,6 +576,15 @@ def describe_page(html: str) -> dict:
 
 _AD_PATH = re.compile(r"(annonce|/ads?/|classified|detail|/achat|/vente|/bien|propert|listing|/vi/|/offre)", re.I)
 _LONG_ID = re.compile(r"\d{6,}")
+# identifiant de 8 à 40 caractères avec au moins 3 chiffres (« 262U3177U91W »), seul dans un segment d'URL
+_ID_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?=(?:[A-Za-z]*\d){3})[A-Za-z0-9]{8,40}(?![A-Za-z0-9])")
+
+
+def _url_id(url: str) -> Optional[str]:
+    path = urlparse(url).path
+    last = re.sub(r"\.\w{2,5}$", "", path.rstrip("/").rsplit("/", 1)[-1])
+    tokens = _ID_TOKEN.findall(last) or _LONG_ID.findall(path) or _LONG_ID.findall(urlparse(url).query)
+    return max(tokens, key=len) if tokens else None
 _NB = r"\d{1,3}(?:[  \xa0.]\d{3})+|\d+"
 _PRICE_TXT = re.compile(rf"({_NB})\s*(?:€|euros?\b)(?!\s*/\s*m)", re.I)
 _LAND_TXT = re.compile(rf"terrain\D{{0,25}}?({_NB})\s*m(?:²|2)|({_NB})\s*m(?:²|2)\s*de\s+terrain"
@@ -515,7 +601,8 @@ def _ad_url(href: str, page_url: Optional[str]) -> Optional[str]:
     u = urlparse(full)
     if u.scheme not in ("http", "https") or not _AD_PATH.search(u.path):
         return None
-    if _LONG_ID.search(u.path):
+    last = re.sub(r"\.\w{2,5}$", "", u.path.rstrip("/").rsplit("/", 1)[-1])
+    if _LONG_ID.search(u.path) or _ID_TOKEN.search(last):
         return u._replace(query="", fragment="").geturl()
     # identifiant passé en paramètre (?id=123456) — mais pas un filtre de recherche comme priceMax=400000
     if re.search(r"(?:^|&)(?:id|ad|adid|ad_id|idannonce|listing|listingid|classified|classifiedid)=\d{6,}", u.query, re.I):
@@ -613,7 +700,7 @@ def extract_cards(soup: BeautifulSoup, page_url: Optional[str]) -> list[Listing]
         heading = card.find(["h1", "h2", "h3", "h4"])
         title = (heading.get_text(" ", strip=True) if heading else "") or links[0].get("title") \
             or links[0].get("aria-label") or links[0].get_text(" ", strip=True) or text[:90]
-        ext_id = max(_LONG_ID.findall(urlparse(url).path + urlparse(url).query), key=len)
+        ext_id = _url_id(url) or hashlib.sha1(url.encode()).hexdigest()[:12]
         listings.append(Listing(
             id=f"{source}:{ext_id}", source=source, url=url, title=title[:200], description=text[:1500],
             property_type=_ptype({}, f"{title} {text[:300]}"), images=_img_urls(card, page_url)[:20],

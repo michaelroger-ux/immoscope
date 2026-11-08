@@ -19,7 +19,7 @@ import httpx
 from .. import config
 from ..db import Database, get_db
 from ..models import Listing
-from .extract import _source_name, diagnose_page, extract_listings, map_object
+from .extract import _diag_skeleton, _source_name, diagnose_page, extract_listings, map_object
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def remember_failed_page(html: str, url: Optional[str], db: Database) -> str:
     db.cache_set(key, {"url": url, "size": len(html), "html": html[:10_000_000]})
     for old_key, _ in db.cache_entries(FAILED_PREFIX)[FAILED_KEEP:]:
         db.cache_delete(old_key)
-    log.warning("DIAG Aucune annonce reconnue : %s", url or "sans adresse")
+    log.warning("DIAG Page à analyser (aucune annonce, ou annonces incomplètes) : %s", url or "sans adresse")
     try:
         for line in diagnose_page(html, url):
             log.warning("DIAG %s", line[:2000])
@@ -88,6 +88,18 @@ def import_html(html: str, url: Optional[str] = None, db: Optional[Database] = N
     listings = extract_listings(html, url)
     if not listings and html.strip():
         remember_failed_page(html, url, db)
+    elif listings:
+        n = len(listings)
+        with_photos = sum(1 for x in listings if x.images)
+        with_text = sum(1 for x in listings if len(x.description) > 40)
+        own_link = sum(1 for x in listings if x.url and x.url != url)
+        log.warning("IMPORT %s : %d annonce(s), %d avec photos, %d avec description, %d avec lien propre",
+                    _source_name(url), n, with_photos, with_text, own_link)
+        if with_photos < n / 2 or with_text < n / 2:
+            remember_failed_page(html, url, db)  # structure dans les journaux pour adapter l'extraction
+            sample = listings[0].raw.get("card_text") or listings[0].raw
+            log.warning("DIAG exemple d'objet extrait : %s",
+                        json.dumps(_diag_skeleton(sample), ensure_ascii=False, default=str)[:3000])
     return save_listings(listings, db)
 
 
