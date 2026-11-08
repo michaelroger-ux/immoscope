@@ -542,7 +542,19 @@ def extract_listings(html: str, page_url: Optional[str] = None) -> list[Listing]
         main_text = (soup.find("main") or soup.body or soup).get_text(" ", strip=True)
         facts = {k: v for k, v in text_facts(main_text[:20000]).items() if getattr(og_listing, k) in (None, "")}
         og_listing = og_listing.model_copy(update=facts)
-    return [og_listing] if og_listing and (og_listing.images or og_listing.price) else []
+    if og_listing and (og_listing.price or (og_listing.images and _looks_like_property(og_listing))):
+        return [og_listing]
+    return []
+
+
+_PROPERTY_WORDS = re.compile(r"\b(maison|appartement|villa|longere|terrain|propriete|immeuble|studio|duplex|loft|"
+                             r"mas|chalet|ferme|fermette|bastide|manoir|pieces?|chambres?|m2|vendre|vente|achat|"
+                             r"immobili\w*|house|apartment|flat|bedrooms?)\b")
+
+
+def _looks_like_property(listing: Listing) -> bool:
+    """Une page sans prix n'est gardée que si elle parle visiblement d'un bien (pas une vidéo, un article…)."""
+    return bool(_PROPERTY_WORDS.search(normalize(f"{listing.title} {listing.description}")))
 
 
 _WINDOW_ASSIGN = re.compile(r"""window\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*["']([^"']+)["']\s*\])\s*=""")

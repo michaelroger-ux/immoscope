@@ -115,3 +115,13 @@ def test_photos_found_under_unusual_keys():
            "seller": {"avatar": "https://cdn.example/avatars/9.jpg"}}
     x = map_object(obj, "https://immo.example/recherche")
     assert x.images == ["https://cdn.example/visuels/1/large.jpg", "https://cdn.example/visuels/2/large.jpg"]
+
+
+def test_non_property_page_is_not_imported():
+    video = """<html><head><meta property="og:title" content="Comment ajouter un favori dans Chrome">
+      <meta property="og:description" content="Tutoriel en 2 minutes"><meta property="og:image" content="https://i.ytimg.com/vi/x/hq.jpg">
+      </head><body></body></html>"""
+    assert extract_listings(video, "https://www.youtube.com/watch?v=abc123") == []
+    agency = video.replace("Comment ajouter un favori dans Chrome", "Maison 5 pièces avec jardin à vendre")
+    [x] = extract_listings(agency, "https://agence.example/biens/maison-jardin")
+    assert x.title.startswith("Maison 5 pièces")

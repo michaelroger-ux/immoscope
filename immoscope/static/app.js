@@ -406,7 +406,9 @@ async function openDetail(id) {
     : `<tr class="none"><td><span class="legend-dot" style="background:${GROUP_COLORS[c.group]}"></span>${esc(c.label)}</td><td colspan="3">aucun(e) à moins de ${dist(c.s.radius_m)}</td></tr>`).join("");
 
   $("#detail-body").innerHTML = `
-    <div class="modal-head"><h2>${esc(l.title || "Annonce")}</h2><button class="icon" data-close aria-label="Fermer">✕</button></div>
+    <div class="modal-head"><h2>${esc(l.title || "Annonce")}</h2>
+      <span class="row"><button class="btn small" data-delete="${esc(l.id)}" title="Retirer cette annonce d'Immoscope">Supprimer</button>
+      <button class="icon" data-close aria-label="Fermer">✕</button></span></div>
     <div class="detail"><div class="grid">
       <div>
         <div class="gallery">
@@ -431,7 +433,6 @@ async function openDetail(id) {
         <div class="detail-actions">
           ${l.url ? `<a class="btn primary" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Voir l'annonce d'origine</a>` : ""}
           ${l.source !== "demo" ? `<button class="btn" data-reprocess="${esc(l.id)}">Refaire les analyses</button>` : ""}
-          <button class="btn" data-delete="${esc(l.id)}">Supprimer</button>
         </div>
       </div>
     </div></div>`;
