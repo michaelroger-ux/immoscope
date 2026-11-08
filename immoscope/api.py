@@ -316,3 +316,27 @@ def api_visual_check(req: VisualCheckRequest):
     if not req.question.strip() or not req.ids:
         raise HTTPException(422, "Question et annonces requises.")
     return start_visual_checks(req.question.strip(), req.ids[:25])
+
+
+@app.get("/api/debug/failed-imports")
+def api_failed_imports():
+    """Dernières pages dont aucune annonce n'a été extraite (pour adapter l'extraction)."""
+    from .sources.extract import describe_page
+    from .sources.importers import FAILED_PREFIX
+    db = get_db()
+    out = []
+    for key, at in db.cache_entries(FAILED_PREFIX):
+        item = db.cache_get(key) or {}
+        out.append({"key": key, "at": at, "url": item.get("url"), "size": item.get("size"),
+                    "structure": describe_page(item.get("html") or "")})
+    return {"pages": out}
+
+
+@app.get("/api/debug/failed-imports/{key:path}")
+def api_failed_import(key: str):
+    from .sources.importers import FAILED_PREFIX
+    item = get_db().cache_get(key) if key.startswith(FAILED_PREFIX) else None
+    if not item:
+        raise HTTPException(404, "Page introuvable")
+    return Response(item.get("html") or "", media_type="text/plain; charset=utf-8",
+                    headers={"X-Page-Url": item.get("url") or ""})

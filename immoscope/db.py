@@ -253,6 +253,15 @@ class Database:
                   "ON CONFLICT (key) DO UPDATE SET created_at = excluded.created_at, data = excluded.data",
                   (key, now_iso(), json.dumps(value, ensure_ascii=False)))
 
+    def cache_entries(self, prefix: str) -> list[tuple[str, str]]:
+        """(clé, date) des entrées dont la clé commence par `prefix`, les plus récentes d'abord."""
+        rows = self._all("SELECT key, created_at FROM cache WHERE key LIKE ? ORDER BY created_at DESC, key DESC",
+                         (prefix.replace("%", "") + "%",))
+        return [(r["key"], r["created_at"]) for r in rows]
+
+    def cache_delete(self, key: str) -> None:
+        self._run("DELETE FROM cache WHERE key = ?", (key,))
+
     def clear(self) -> None:
         """Vide toutes les tables (tests)."""
         for table in ("visual_checks", "vision", "location", "cache", "listings"):

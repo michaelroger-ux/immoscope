@@ -312,7 +312,36 @@ def _json_ld(soup: BeautifulSoup) -> list[dict]:
     return objs
 
 
-_ASSIGN = re.compile(r"(?:window\.)?__[A-Z0-9_]+__\s*=\s*|window\.[A-Za-z_]*(?:state|data|props)[A-Za-z_]*\s*=\s*", re.I)
+_ASSIGN = re.compile(r"(?:window\.)?__[A-Z0-9_]+__\s*=\s*|window\.[A-Za-z_]*(?:state|data|props)[A-Za-z_]*\s*=\s*"
+                     r"|window\s*\[\s*[\"'][^\"']+[\"']\s*\]\s*=\s*", re.I)
+_JS_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}
+
+
+def _js_string(src: str) -> Optional[str]:
+    """Lit un littéral de chaîne JavaScript ('…' ou "…", échappements \\x et \\u compris)."""
+    if not src or src[0] not in "\"'":
+        return None
+    quote, out, i = src[0], [], 1
+    while i < len(src):
+        c = src[i]
+        if c == quote:
+            return "".join(out)
+        if c == "\\" and i + 1 < len(src):
+            n = src[i + 1]
+            if n == "x" and i + 3 < len(src):
+                out.append(chr(int(src[i + 2:i + 4], 16)))
+                i += 4
+                continue
+            if n == "u" and i + 5 < len(src):
+                out.append(chr(int(src[i + 2:i + 6], 16)))
+                i += 6
+                continue
+            out.append(_JS_ESCAPES.get(n, n))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return None
 
 
 def _embedded_json(soup: BeautifulSoup) -> list[Any]:
@@ -334,11 +363,11 @@ def _embedded_json(soup: BeautifulSoup) -> list[Any]:
         for m in _ASSIGN.finditer(content):
             rest = content[m.end():].lstrip()
             if rest.startswith("JSON.parse("):
-                inner = rest[len("JSON.parse("):].lstrip()
                 try:
-                    s, _ = decoder.raw_decode(inner)
-                    blobs.append(json.loads(s))
-                except (json.JSONDecodeError, TypeError):
+                    text = _js_string(rest[len("JSON.parse("):].lstrip())
+                    if text:
+                        blobs.append(json.loads(text))
+                except (json.JSONDecodeError, ValueError, TypeError):
                     pass
                 continue
             try:
@@ -417,10 +446,223 @@ def extract_listings(html: str, page_url: Optional[str] = None) -> list[Listing]
             return [main]
     if len(embedded) >= 2:  # page de résultats
         return embedded
+    is_ad_page = bool(page_url and _ad_url(page_url, None))
+    # page de résultats sans données intégrées exploitables : cartes affichées
+    # (sur une page d'annonce, les cartes sont des « annonces similaires » : on les ignore)
+    cards = [] if is_ad_page else extract_cards(soup, page_url)
+    if len(cards) >= 2:
+        return cards
     candidates = embedded + ld
     if candidates:
         main = candidates[0]
         for extra in candidates[1:] + ([og_listing] if og_listing else []):
             main = _merge(main, extra)
         return [main]
+    if cards:
+        return cards
+    if og_listing and is_ad_page:
+        # page d'annonce sans données structurées : OpenGraph complété par le texte de la page
+        main_text = (soup.find("main") or soup.body or soup).get_text(" ", strip=True)
+        facts = {k: v for k, v in text_facts(main_text[:20000]).items() if getattr(og_listing, k) in (None, "")}
+        og_listing = og_listing.model_copy(update=facts)
     return [og_listing] if og_listing and (og_listing.images or og_listing.price) else []
+
+
+_WINDOW_ASSIGN = re.compile(r"""window\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*["']([^"']+)["']\s*\])\s*=""")
+
+
+def describe_page(html: str) -> dict:
+    """Empreinte de la structure d'une page (sans son contenu), pour diagnostiquer une page non reconnue."""
+    soup = BeautifulSoup(html, "lxml")
+    scripts = soup.find_all("script")
+    ld_types = []
+    for o in _json_ld(soup):
+        t = o.get("@type")
+        ld_types += t if isinstance(t, list) else [t]
+    return {
+        "taille": len(html),
+        "titre": (soup.title.get_text(strip=True)[:80] if soup.title else None),
+        "scripts": len(scripts),
+        "scripts_json": [s.get("id") or s.get("type") for s in scripts
+                         if (s.get("type") or "").lower() in ("application/json", "application/ld+json")][:15],
+        "window": sorted({a or b for a, b in _WINDOW_ASSIGN.findall(html)})[:25],
+        "json_ld": ld_types[:10],
+        "next_data": "__NEXT_DATA__" in html,
+        "mentions_prix": html.count('"price"') + html.count('\\"price\\"'),
+        "liens_annonces": len(re.findall(r'href="[^"]*/annonces/', html)),
+    }
+
+
+# ----------------------------------------------------------------------------------------
+# Lecture des « cartes » d'annonces affichées (page rendue envoyée par le marque-page)
+# ----------------------------------------------------------------------------------------
+
+_AD_PATH = re.compile(r"(annonce|/ads?/|classified|detail|/achat|/vente|/bien|propert|listing|/vi/|/offre)", re.I)
+_LONG_ID = re.compile(r"\d{6,}")
+_NB = r"\d{1,3}(?:[  \xa0.]\d{3})+|\d+"
+_PRICE_TXT = re.compile(rf"({_NB})\s*(?:€|euros?\b)(?!\s*/\s*m)", re.I)
+_LAND_TXT = re.compile(rf"terrain\D{{0,25}}?({_NB})\s*m(?:²|2)|({_NB})\s*m(?:²|2)\s*de\s+terrain"
+                       r"|(\d+(?:[.,]\d+)?)\s*ha\b", re.I)
+_SURF_TXT = re.compile(rf"({_NB}(?:[.,]\d+)?)\s*m(?:²|2)(?!\s*de\s+terrain)", re.I)
+_ROOMS_TXT = re.compile(r"(\d+)\s*pi[eè]ces?\b", re.I)
+_BEDS_TXT = re.compile(r"(\d+)\s*(?:chambres?\b|ch\.)", re.I)
+_CP_CITY_TXT = re.compile(r"\b(\d{5})\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’\-]+(?:[ \-](?:[Ll]e|[Ll]a|[Ll]es|sur|sous|en|de|d'|[A-ZÀ-Ý][A-Za-zÀ-ÿ'’\-]+)){0,4})")
+_CITY_CP_TXT = re.compile(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ'’\-]+(?:[ \-][A-Za-zÀ-ÿ'’\-]+){0,4})\s*\((\d{5}|\d{2}|2[AB])\)")
+
+
+def _ad_url(href: str, page_url: Optional[str]) -> Optional[str]:
+    full = urljoin(page_url or "", href)
+    u = urlparse(full)
+    if u.scheme not in ("http", "https") or not _AD_PATH.search(u.path):
+        return None
+    if _LONG_ID.search(u.path):
+        return u._replace(query="", fragment="").geturl()
+    # identifiant passé en paramètre (?id=123456) — mais pas un filtre de recherche comme priceMax=400000
+    if re.search(r"(?:^|&)(?:id|ad|adid|ad_id|idannonce|listing|listingid|classified|classifiedid)=\d{6,}", u.query, re.I):
+        return u._replace(fragment="").geturl()
+    return None
+
+
+def _img_urls(node, base: Optional[str]) -> list[str]:
+    urls: list[str] = []
+    for tag in node.find_all(["img", "source"]):
+        cands = [tag.get(a) for a in ("src", "data-src", "data-lazy", "data-original")]
+        for attr in ("srcset", "data-srcset"):
+            if tag.get(attr):
+                cands += [part.strip().split(" ")[0] for part in tag[attr].split(",")]
+        for c in cands:
+            if not c or c.startswith("data:"):
+                continue
+            full = urljoin(base or "", c.strip())
+            low = full.lower()
+            if full.startswith("http") and not low.endswith(".svg") and "logo" not in low and "icon" not in low \
+                    and full not in urls:
+                urls.append(full)
+    return urls
+
+
+def _number(raw: Optional[str]) -> Optional[float]:
+    return parse_number(raw) if raw else None
+
+
+def text_facts(text: str) -> dict:
+    """Prix, surfaces, pièces et commune lus dans un texte d'annonce (« 349 000 € · 120 m² · 5 pièces »)."""
+    facts: dict = {}
+    prices = [v for m in _PRICE_TXT.finditer(text) if (v := _number(m.group(1))) and v >= 10_000]
+    if prices:
+        facts["price"] = prices[0]
+    if m := _LAND_TXT.search(text):
+        if m.group(3):
+            facts["land_surface"] = (_number(m.group(3)) or 0) * 10_000
+        else:
+            facts["land_surface"] = _number(m.group(1) or m.group(2))
+    land_spans = [m.span() for m in _LAND_TXT.finditer(text)]
+    for m in _SURF_TXT.finditer(text):
+        if any(a <= m.start() < b for a, b in land_spans):
+            continue
+        v = _number(m.group(1))
+        if v and 8 <= v <= 2000:
+            facts["surface"] = v
+            break
+    if m := _ROOMS_TXT.search(text):
+        facts["rooms"] = int(m.group(1))
+    if m := _BEDS_TXT.search(text):
+        facts["bedrooms"] = int(m.group(1))
+    if m := _CP_CITY_TXT.search(text):
+        facts["postcode"], facts["city"] = m.group(1), m.group(2).strip()
+    elif m := _CITY_CP_TXT.search(text):
+        facts["city"] = m.group(1).strip()
+        if len(m.group(2)) == 5:
+            facts["postcode"] = m.group(2)
+    return facts
+
+
+def extract_cards(soup: BeautifulSoup, page_url: Optional[str]) -> list[Listing]:
+    """Annonces lues dans les cartes de résultats : un lien vers l'annonce + un prix dans le même bloc."""
+    source = _source_name(page_url)
+    page_key = _ad_url(page_url, None) if page_url else None
+    anchors: dict[str, list] = {}
+    for a in soup.find_all("a", href=True):
+        key = _ad_url(a["href"], page_url)
+        if key and key != page_key:
+            anchors.setdefault(key, []).append(a)
+    if not anchors:
+        return []
+    owner: dict[int, set] = {}  # élément -> annonces qu'il contient
+
+    def ads_in(node) -> set:
+        nid = id(node)
+        if nid not in owner:
+            owner[nid] = {k for a in node.find_all("a", href=True) if (k := _ad_url(a["href"], page_url))}
+            if node.name == "a" and (k := _ad_url(node.get("href", ""), page_url)):
+                owner[nid].add(k)
+        return owner[nid]
+
+    listings: list[Listing] = []
+    for url, links in anchors.items():
+        card = links[0]
+        while card.parent is not None and card.parent.name not in ("body", "html", "[document]"):
+            parent = card.parent
+            if ads_in(parent) - {url} or len(parent.get_text(" ", strip=True)) > 3000:
+                break
+            card = parent
+        text = card.get_text(" ", strip=True)
+        facts = text_facts(text)
+        if "price" not in facts:
+            continue
+        heading = card.find(["h1", "h2", "h3", "h4"])
+        title = (heading.get_text(" ", strip=True) if heading else "") or links[0].get("title") \
+            or links[0].get("aria-label") or links[0].get_text(" ", strip=True) or text[:90]
+        ext_id = max(_LONG_ID.findall(urlparse(url).path + urlparse(url).query), key=len)
+        listings.append(Listing(
+            id=f"{source}:{ext_id}", source=source, url=url, title=title[:200], description=text[:1500],
+            property_type=_ptype({}, f"{title} {text[:300]}"), images=_img_urls(card, page_url)[:20],
+            raw={"card_text": text[:3000]}, **facts,
+        ))
+    return listings
+
+
+def _diag_skeleton(obj: Any, depth: int = 0, max_items: int = 60) -> Any:
+    """Squelette d'un objet JSON : clés, types et courts extraits (pour les journaux)."""
+    if depth > 3:
+        return "…"
+    if isinstance(obj, dict):
+        return {k: _diag_skeleton(v, depth + 1) for k, v in list(obj.items())[:25]}
+    if isinstance(obj, list):
+        return [f"{len(obj)} élément(s)", _diag_skeleton(obj[0], depth + 1)] if obj else []
+    if isinstance(obj, str):
+        return obj[:40]
+    return obj
+
+
+def diagnose_page(html: str, page_url: Optional[str] = None) -> list[str]:
+    """Lignes de diagnostic d'une page non reconnue : structure, liens d'annonces, données intégrées."""
+    soup = BeautifulSoup(html, "lxml")
+    lines = [f"structure {json.dumps(describe_page(html), ensure_ascii=False)}"]
+    ad_links = sorted({k for a in soup.find_all("a", href=True) if (k := _ad_url(a["href"], page_url))})
+    lines.append(f"liens d'annonces : {len(ad_links)} ; exemples {[urlparse(u).path for u in ad_links[:3]]}")
+    body_text = soup.get_text(" ", strip=True)
+    snippets = [body_text[max(0, m.start() - 70):m.end() + 50] for m in _PRICE_TXT.finditer(body_text)][:3]
+    lines.append(f"textes autour des prix : {json.dumps(snippets, ensure_ascii=False)}")
+    price_re = re.compile(r"price|prix", re.I)
+    for b, blob in enumerate(_embedded_json(soup)[:6]):
+        top = list(blob)[:20] if isinstance(blob, dict) else f"liste de {len(blob)}" if isinstance(blob, list) else type(blob).__name__
+        lines.append(f"données intégrées n°{b} : clés {top}")
+        patterns: dict[str, list] = {}
+
+        def walk(v: Any, path: str, d: int = 0):
+            if d > 30:
+                return
+            if isinstance(v, dict):
+                if any(isinstance(k, str) and price_re.search(k) for k in v):
+                    patterns.setdefault(path, []).append(v)
+                for k, x in v.items():
+                    walk(x, f"{path}.{k}", d + 1)
+            elif isinstance(v, list):
+                for x in v[:200]:
+                    walk(x, f"{path}[]", d + 1)
+        walk(blob, "$")
+        for path, objs in sorted(patterns.items(), key=lambda kv: -len(kv[1]))[:3]:
+            sk = json.dumps(_diag_skeleton(objs[0]), ensure_ascii=False, default=str)
+            lines.append(f"  objets avec prix {path} ×{len(objs)} : {sk[:1800]}")
+    return lines

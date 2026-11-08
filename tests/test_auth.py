@@ -72,3 +72,18 @@ def test_locked_on_render_without_password(db, monkeypatch):
     assert c.get("/").status_code == 503 and "IMMO_PASSWORD" in c.get("/").text
     assert c.post("/api/demo/load").status_code == 503
     assert c.get("/static/app.js").status_code == 503
+
+
+def test_failed_pages_kept_for_diagnosis(protected, db, monkeypatch):
+    c = protected
+    page = "<html><head><title>Résultats</title></head><body><script>window['__DATA__']={}</script></body></html>"
+    c.post("/login", data={"password": "chamois-42"})
+    for i in range(7):
+        assert c.post("/api/import/html", json={"html": page + " " * i, "url": f"https://site.example/r?{i}"}).status_code == 422
+    pages = c.get("/api/debug/failed-imports").json()["pages"]
+    assert len(pages) == 5 and pages[0]["url"] == "https://site.example/r?6"
+    assert pages[0]["structure"]["window"] == ["__DATA__"]
+    # sans session, rien n'est lisible (aucun accès de maintenance)
+    assert TestClient(app).get("/api/debug/failed-imports").status_code == 401
+    r = c.get(f"/api/debug/failed-imports/{pages[0]['key']}")
+    assert r.status_code == 200 and r.text.startswith("<html>")

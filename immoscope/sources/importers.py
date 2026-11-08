@@ -19,7 +19,7 @@ import httpx
 from .. import config
 from ..db import Database, get_db
 from ..models import Listing
-from .extract import _source_name, extract_listings, map_object
+from .extract import _source_name, diagnose_page, extract_listings, map_object
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +63,31 @@ def save_listings(listings: list[Listing], db: Optional[Database] = None) -> dic
     return {"found": len(listings), "new": new, "updated": len(listings) - new, "ids": [x.id for x in listings]}
 
 
+FAILED_PREFIX = "failed_import:"
+FAILED_KEEP = 5
+
+
+def remember_failed_page(html: str, url: Optional[str], db: Database) -> str:
+    """Garde une copie des dernières pages non reconnues, pour adapter l'extraction au site concerné."""
+    from ..db import now_iso
+    key = f"{FAILED_PREFIX}{now_iso()}:{len(html)}"
+    db.cache_set(key, {"url": url, "size": len(html), "html": html[:10_000_000]})
+    for old_key, _ in db.cache_entries(FAILED_PREFIX)[FAILED_KEEP:]:
+        db.cache_delete(old_key)
+    log.warning("DIAG Aucune annonce reconnue : %s", url or "sans adresse")
+    try:
+        for line in diagnose_page(html, url):
+            log.warning("DIAG %s", line[:2000])
+    except Exception as exc:  # le diagnostic ne doit jamais faire échouer l'import
+        log.warning("DIAG impossible : %s", exc)
+    return key
+
+
 def import_html(html: str, url: Optional[str] = None, db: Optional[Database] = None) -> dict:
+    db = db or get_db()
     listings = extract_listings(html, url)
+    if not listings and html.strip():
+        remember_failed_page(html, url, db)
     return save_listings(listings, db)
 
 
