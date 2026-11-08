@@ -64,3 +64,13 @@ def test_text_mention_used_when_photos_not_analyzed(db):
     assert crit["facade_pierre"]["status"] == "ok" and "mentionné" in crit["facade_pierre"]["detail"]
     assert crit["vue_mer"]["status"] == "inconnu"
     assert res["not_analyzed"] == 1
+
+
+def test_result_carries_position_from_location_analysis(db):
+    from immoscope.models import Listing, LocationAnalysis
+    db.upsert_listing(Listing(id="s:1", source="s", title="Maison", city="Dourdan", postcode="91410"))
+    db.upsert_listing(Listing(id="s:2", source="s", title="Maison 2", city="Étampes"))
+    db.save_location(LocationAnalysis(listing_id="s:1", lat=48.53, lon=2.01, geo_precision="commune"), "48.53,2.01")
+    res = {r["listing"]["id"]: r for r in search(SearchQuery(), db=db)["results"]}
+    assert (res["s:1"]["lat"], res["s:1"]["lon"], res["s:1"]["geo_precision"]) == (48.53, 2.01, "commune")
+    assert res["s:2"]["lat"] is None  # pas encore analysée : pas de position

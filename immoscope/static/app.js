@@ -292,9 +292,12 @@ function renderResults() {
       <button class="btn" data-open-import="t-url">Importer une annonce</button></div></div>`;
     return;
   }
+  const unplaced = res.results.filter((r) => r.lat == null).length;
   head.innerHTML = `<strong>${res.matched} annonce${res.matched > 1 ? "s" : ""}</strong>
+
     <span>sur ${res.total}${res.excluded ? ` · ${res.excluded} écartée${res.excluded > 1 ? "s" : ""} par les filtres` : ""}</span>
-    ${res.area_center ? `<span>dans un rayon de ${res.area_center.radius_km} km</span>` : ""}`;
+    ${res.area_center ? `<span>dans un rayon de ${res.area_center.radius_km} km</span>` : ""}
+    ${unplaced ? `<span>· ${unplaced} pas encore sur la carte (position calculée par « Lancer l'analyse »)</span>` : ""}`;
   let banner = "";
   const usesPhotos = state.query.visual.length || state.query.visual_free.length;
   if (usesPhotos && res.not_analyzed) {
@@ -357,16 +360,23 @@ function renderMap() {
     L.circle([res.area_center.lat, res.area_center.lon], { radius: res.area_center.radius_km * 1000, color: "#2f6f5e", weight: 1, fillOpacity: 0.05 }).addTo(state.layer);
     pts.push([res.area_center.lat, res.area_center.lon]);
   }
+  const stacked = {};  // plusieurs biens au même point (centre de commune) : disposés en cercle autour
   for (const r of res.results) {
     const l = r.listing;
-    if (l.lat == null || l.lon == null) continue;
+    if (r.lat == null || r.lon == null) continue;
+    const key = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
+    const k = (stacked[key] = (stacked[key] ?? -1) + 1);
+    const ring = Math.ceil(k / 8), angle = (k % 8) * (Math.PI / 4) + ring;
+    const lat = r.lat + (k ? 0.0022 * ring * Math.cos(angle) : 0);
+    const lon = r.lon + (k ? 0.0032 * ring * Math.sin(angle) : 0);
     const label = r.score == null ? "•" : Math.round(r.score * 100);
     const icon = L.divIcon({ className: "", html: `<div class="score-marker" style="background:${scoreColor(r.score)}">${label}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
-    const m = L.marker([l.lat, l.lon], { icon, title: l.title }).addTo(state.layer);
-    m.bindPopup(`<strong>${esc(l.title)}</strong><br>${euros(l.price)} — ${esc(l.city || "")}<br><a href="#" data-detail="${esc(l.id)}">Voir le détail</a>`);
+    const m = L.marker([lat, lon], { icon, title: l.title }).addTo(state.layer);
+    const approx = r.geo_precision === "commune" ? `<br><span style="color:#777">Position approximative : ${esc(l.city || "commune")}</span>` : "";
+    m.bindPopup(`<strong>${esc(l.title)}</strong><br>${euros(l.price)} — ${esc(l.city || "")}${approx}<br><a href="#" data-detail="${esc(l.id)}">Voir le détail</a>`);
     m.on("click", () => highlight(l.id));
     state.markers[l.id] = m;
-    pts.push([l.lat, l.lon]);
+    pts.push([lat, lon]);
   }
   if (pts.length) state.map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 });
 }

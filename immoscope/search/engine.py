@@ -43,6 +43,10 @@ class SearchResult:
     enriched: bool = False
     distance_km: Optional[float] = None
     warnings: list[str] = field(default_factory=list)
+    # position pour la carte : celle du site, sinon celle calculée lors de l'analyse (géocodage)
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    geo_precision: Optional[str] = None
 
 
 def fmt_distance(m: float) -> str:
@@ -273,6 +277,8 @@ def search(query: SearchQuery, *, db: Optional[Database] = None, strict: bool = 
         results.append(SearchResult(
             listing=listing.model_dump(), score=score, criteria=crit, best_image=best_image, analyzed=analyzed,
             enriched=loc is not None and not loc.error, distance_km=distance_km, warnings=warnings,
+            lat=lat, lon=lon,
+            geo_precision=listing.geo_precision if listing.lat is not None else (loc.geo_precision if loc else None),
         ))
 
     def recency(r: SearchResult) -> str:
