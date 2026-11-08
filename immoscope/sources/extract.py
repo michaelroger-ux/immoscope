@@ -267,7 +267,7 @@ def map_object(obj: dict, page_url: Optional[str] = None, source: Optional[str] 
     description = _text(_first(flat, _DESC_KEYS)) or ""
     if description == title:
         description = ""
-    images = _images(flat, url) or _scan_images(obj, url)
+    images = dedupe_images(_images(flat, url) or _scan_images(obj, url))
     surface = _num(_first(flat, _SURFACE_KEYS))
     land = _num(_first(flat, _LAND_KEYS))
     rooms = _num(_first(flat, _ROOMS_KEYS))
@@ -449,6 +449,34 @@ def _opengraph(soup: BeautifulSoup, page_url: Optional[str]) -> Optional[dict]:
     }
 
 
+_SIZE_SEG = re.compile(r"^(?:\d+x\d+|[wh]_?\d+|\d{2,4}|width|height|crop|resize|fit|fill|thumbs?|small|medium|"
+                       r"large|xl|xxl|original|full)$", re.I)
+_SIZE_SUFFIX = re.compile(r"(?:[_\-@.](?:\d+x\d+|\d+w|w\d+|h\d+|[23]x|small|medium|large|thumb|xl))+$", re.I)
+
+
+def _photo_key(url: str) -> str:
+    """Même photo en plusieurs tailles (« /crop/590x330/…/abc123.jpg », « …/abc123@2x.jpg ») → même clé."""
+    u = urlparse(url)
+    segs = [seg for seg in u.path.split("/") if seg and not _SIZE_SEG.match(seg)]
+    if not segs:
+        return url
+    stem = _SIZE_SUFFIX.sub("", re.sub(r"\.\w{2,5}$", "", segs[-1]))
+    if len(stem) >= 8:  # nom de fichier distinctif (empreinte, identifiant) : indépendant du serveur et du format
+        return stem.lower()
+    return f"{u.netloc}/{'/'.join(segs[:-1] + [stem])}".lower()
+
+
+def dedupe_images(urls: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out = []
+    for u in urls:
+        key = _photo_key(u)
+        if key not in seen:
+            seen.add(key)
+            out.append(u)
+    return out
+
+
 def _merge(primary: Listing, other: Listing) -> Listing:
     data = primary.model_dump()
     for k, v in other.model_dump().items():
@@ -458,9 +486,7 @@ def _merge(primary: Listing, other: Listing) -> Listing:
             data[k] = v
     if len(other.description) > len(primary.description):
         data["description"] = other.description
-    for img in other.images:
-        if img not in data["images"]:
-            data["images"].append(img)
+    data["images"] = dedupe_images(data["images"] + other.images)
     return Listing(**data, raw=primary.raw)
 
 
@@ -484,6 +510,8 @@ def _merge_cards(listings: list[Listing], cards: list[Listing], page_url: Option
             out.append(item)
             continue
         merged = _merge(item, card)
+        # les photos de la carte (souvent les 3 premières, en vignette) ne servent que si l'annonce n'en a pas
+        merged = merged.model_copy(update={"images": item.images or card.images})
         if (not item.url or item.url == page_url) and card.url:
             merged = merged.model_copy(update={"url": card.url})
         # la description propre de l'annonce prime sur le texte brut de la carte
@@ -715,7 +743,7 @@ def extract_cards(soup: BeautifulSoup, page_url: Optional[str]) -> list[Listing]
         ext_id = _url_id(url) or hashlib.sha1(url.encode()).hexdigest()[:12]
         listings.append(Listing(
             id=f"{source}:{ext_id}", source=source, url=url, title=title[:200], description=text[:1500],
-            property_type=_ptype({}, f"{title} {text[:300]}"), images=_img_urls(card, page_url)[:20],
+            property_type=_ptype({}, f"{title} {text[:300]}"), images=dedupe_images(_img_urls(card, page_url))[:20],
             raw={"card_text": text[:3000]}, **facts,
         ))
     return listings

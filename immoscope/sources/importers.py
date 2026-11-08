@@ -93,8 +93,9 @@ def import_html(html: str, url: Optional[str] = None, db: Optional[Database] = N
         with_photos = sum(1 for x in listings if x.images)
         with_text = sum(1 for x in listings if len(x.description) > 40)
         own_link = sum(1 for x in listings if x.url and x.url != url)
-        log.warning("IMPORT %s : %d annonce(s), %d avec photos, %d avec description, %d avec lien propre",
-                    _source_name(url), n, with_photos, with_text, own_link)
+        log.warning("IMPORT %s : %d annonce(s), %d avec photos, %d avec description, %d avec lien propre ; "
+                    "photos de la 1re : %s", _source_name(url), n, with_photos, with_text, own_link,
+                    json.dumps(listings[0].images[:12]))
         if with_photos < n / 2 or with_text < n / 2:
             remember_failed_page(html, url, db)  # structure dans les journaux pour adapter l'extraction
             sample = listings[0].raw.get("card_text") or listings[0].raw

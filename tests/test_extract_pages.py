@@ -125,3 +125,26 @@ def test_non_property_page_is_not_imported():
     agency = video.replace("Comment ajouter un favori dans Chrome", "Maison 5 pièces avec jardin à vendre")
     [x] = extract_listings(agency, "https://agence.example/biens/maison-jardin")
     assert x.title.startswith("Maison 5 pièces")
+
+
+def test_same_photo_in_several_sizes_kept_once():
+    from immoscope.sources.extract import dedupe_images
+    urls = ["https://v.seloger.com/s/width/800/visuels/1/a/b/1ab2c3d4e5.jpg",
+            "https://v.seloger.com/s/crop/590x330/visuels/1/a/b/1ab2c3d4e5.jpg",
+            "https://v.seloger.com/s/width/800/visuels/0/f/9/0f9e8d7c6b.jpg",
+            "https://cdn.example/biens/12/photo-1.jpg", "https://cdn.example/biens/12/photo-1@2x.jpg",
+            "https://cdn.example/biens/12/photo-2.jpg"]
+    assert dedupe_images(urls) == [urls[0], urls[2], urls[3], urls[5]]
+
+
+def test_card_thumbnails_not_appended_to_listing_photos():
+    photos = [f"https://v.seloger.example/s/width/800/visuels/{i}/photo{i}abcdef.jpg" for i in range(5)]
+    items = [{"id": f"26ABC{i}DEF{i}9", "title": "Maison", "price": 300000 + i, "photos": photos,
+              "mainDescription": {"description": "Maison au calme avec jardin arboré et garage."}} for i in range(2)]
+    cards = "".join(f"""<li><a href="/annonces/achat/maison/x/26ABC{i}DEF{i}9.htm">
+        {''.join(f'<img src="https://v.seloger.example/s/crop/590x330/visuels/{j}/photo{j}abcdef.jpg">' for j in range(3))}</a>
+        <p>{300000 + i} €</p></li>""" for i in range(2))
+    html = (f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps({"r": items})}</script>'
+            f'<ul>{cards}</ul></body></html>')
+    a, b = extract_listings(html, "https://www.seloger.com/classified-search?x=1")
+    assert a.images == photos and b.images == photos
